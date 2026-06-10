@@ -56,7 +56,7 @@ PUBLIC_KEYS = [
     "4c69624e61434c504b3a39ee7f7c6d5e4250e41b0a428ccd0ba344716db6c8882d088908739b6fad737c25ecb2419646b6763e87b7307d145919d35df26220f36ed0637b5ff86176ef91"
 ]
 
-BLOCKCHAIN_COMMUNITY_ID_STR = "434c41554449414c414233424c4f434b32363030"
+BLOCKCHAIN_COMMUNITY_ID_STR = "434c41554449414c414233424c4f434b32363040"
 
 
 def pubkey_to_name(pubkey_hex: str) -> str:
@@ -386,12 +386,12 @@ class TuDelftBlockchainLab3Community(Community):
         concat = sender_key + data + timestamp.to_bytes(8, "big")
         valid = crypto.is_valid_signature(sender_key_obj, concat, signature)
         
+        tx_hash = self.get_transaction_hash(sender_key, data, timestamp, signature)
+        
         if not valid:
             print(f"[SUBMIT TX] Received invalid transaction from {pubkey_to_name(peer.public_key.key_to_bin().hex())}. Rejecting.")
             response = SubmitTransactionResponse(success=False, tx_hash=tx_hash, message="Invalid transaction")
             self.ez_send(peer, response)
-        
-        tx_hash = self.get_transaction_hash(sender_key, data, timestamp, signature)
         
         print(f"[SUBMIT TX] Received valid transaction with hash {tx_hash.hex()} from {pubkey_to_name(peer.public_key.key_to_bin().hex())}. Adding to mempool.")
         self.mempool.append((sender_key, data, timestamp, signature))
