@@ -125,8 +125,8 @@ class GetBlockResponse(VariablePayload):
 # Intra-community Messages
 class NewBlockBroadcastMessage(VariablePayload):
     msg_id = 101
-    format_list = ["q", "varlenH", "varlenH", "q", "q", "q", "varlenH", "varlenH"]
-    names = ["height", "prev_hash", "txs_hash", "timestamp", "difficulty", "nonce", "block_hash", "tx_hashes"]
+    format_list = ["varlenH", "varlenH", "q", "q", "q", "varlenH", "varlenH"]
+    names = ["prev_hash", "txs_hash", "timestamp", "difficulty", "nonce", "block_hash", "tx_hashes"]
     
 class NewBlockBroadcastResponse(VariablePayload):
     msg_id = 102
@@ -246,7 +246,15 @@ class TuDelftBlockchainLab3Community(Community):
         self.member3_key = settings.member3_key
         
         self.mempool = []
-        self.chain = []
+        self.current_tip = None
+        
+        self.blocks = {}    # all the blocks, including orphans, by hash
+        self.children = {}  # mapping of a block hash to its children hashes
+        self.tips = set()   # set of block hashes with no children
+        self.parent = {}    # mapping of a block hash to its parent hash
+        self.height = {}    # mapping of a block hash to its current height
+        
+        self.genesis = None
         
         self.generate_genesis_block()
         
@@ -254,7 +262,7 @@ class TuDelftBlockchainLab3Community(Community):
         
         self.mining_interval = 30.0
         self.mining = False
-        self.last_mined_tip = self.chain[-1]["block_hash"]
+        self.last_mined_tip = None
         
         
     def mine(self):
@@ -263,7 +271,13 @@ class TuDelftBlockchainLab3Community(Community):
             return
         
         self.mining = True
-        self.last_mined_tip = self.chain[-1]["block_hash"]
+        self.last_mined_tip = self.current_tip
+        
+        if self.last_mined_tip is None:
+            print("[MINE] Current chain tip is unknown. Cannot start mining. Aborting mining attempt.")
+            self.mining = False
+            return
+        
         included_hashes = []
         for tx in self.mempool:
             tx_hash = self.get_transaction_hash(*tx)
@@ -272,7 +286,7 @@ class TuDelftBlockchainLab3Community(Community):
         
         print(f"[MINE] Creating new block with {len(included_hashes)} transactions.")
         
-        prev_hash = self.chain[-1]["block_hash"]
+        prev_hash = self.last_mined_tip
         txs_hash = self.get_txs_hash(included_hashes)
         timestamp = int(time.time())
         difficulty = 16
@@ -286,7 +300,7 @@ class TuDelftBlockchainLab3Community(Community):
         block_hash = self.get_block_hash(prev_hash, txs_hash, timestamp, difficulty, nonce)
         
         new_block = {
-            "height": len(self.chain),
+            # "height": self.height[prev_hash] + 1 if prev_hash in self.height else 1,
             "prev_hash": prev_hash,
             "txs_hash": txs_hash,
             "timestamp": timestamp,
@@ -295,13 +309,14 @@ class TuDelftBlockchainLab3Community(Community):
             "block_hash": block_hash,
             "tx_hashes": included_hashes,
         }
-        self.chain.append(new_block)
+        # self.chain.append(new_block)
+        self.add_block(new_block)
         self.validated_tx_hashes.update(included_hashes)
         
         print(f"[MINE] New block mined with hash {block_hash.hex()} containing {len(included_hashes)} transactions.")
         
         broadcast = NewBlockBroadcastMessage(
-            height=new_block["height"],
+            # height=new_block["height"],
             prev_hash=new_block["prev_hash"],
             txs_hash=new_block["txs_hash"],
             timestamp=new_block["timestamp"],
@@ -317,6 +332,78 @@ class TuDelftBlockchainLab3Community(Community):
         
         self.mining = False
         
+        
+    def calc_height(self, block_hash):
+        # TODO: Perhaps we don't need the entire traversal here if we are already storing heights (unless orphans?)
+        height = 0
+        current_hash = block_hash
+        while current_hash in self.parent:
+            current_hash = self.parent[current_hash]
+            if current_hash in self.height:
+                height += self.height[current_hash] + 1
+                break
+            height += 1
+        
+        return height
+    
+    
+    def connect_orphans(self, block_hash):
+        if block_hash not in self.children:
+            return
+        
+        for child_hash in self.children[block_hash]:
+            self.parent[child_hash] = block_hash
+            self.height[child_hash] = self.calc_height(child_hash)
+            
+            if block_hash in self.tips:
+                self.tips.remove(block_hash)
+            
+            self.connect_orphans(child_hash)
+        
+        
+    def add_block(self, block):
+        block_hash = block["block_hash"]
+        self.blocks[block_hash] = block # Store the block by its hash
+        
+        prev_hash = block["prev_hash"]
+        if prev_hash not in self.children:
+            self.children[prev_hash] = [] # Initialize children list for the parent hash if it doesn't exist
+        self.children[prev_hash].append(block_hash) # Add this block as a child of its parent
+        
+        if prev_hash in self.tips:
+            self.tips.remove(prev_hash) # If the parent was a tip, it's no longer a tip since it has a child now
+        self.tips.add(block_hash) # This new block is a tip until it gets a child
+        
+        self.parent[block_hash] = prev_hash
+        self.height[block_hash] = self.calc_height(block_hash)
+        
+        self.connect_orphans(block_hash) # Connect any orphans that have this block as their parent
+        
+        current_tip_height = self.height[self.current_tip] if self.current_tip in self.height else -1
+        highest_tip = max(self.tips, key=lambda h: self.height[h])
+        if self.is_complete_chain(highest_tip) and self.height[highest_tip] > current_tip_height:
+            print(f"Switching chain tip from {self.current_tip.hex() if self.current_tip else 'None'} at height {current_tip_height} to new tip {highest_tip.hex()} at height {self.height[highest_tip]} due to new block.")
+            self.current_tip = highest_tip
+
+
+    def get_chain_blocks(self, tip_hash):
+        blocks = []
+        current_hash = tip_hash
+        while current_hash in self.blocks:
+            block = self.blocks[current_hash]
+            blocks.append(block)
+            current_hash = block["prev_hash"]
+        return list(reversed(blocks))
+    
+    
+    def is_complete_chain(self, tip_hash):
+        chain = self.get_chain_blocks(tip_hash)
+        if not chain:
+            return False
+        if chain[0] != self.genesis:
+            return False
+        return True
+            
         
     def is_ready(self) -> bool:
         peers = self.get_peers()
@@ -401,7 +488,8 @@ class TuDelftBlockchainLab3Community(Community):
     def find_nonce(self, payload: bytes, difficulty: int) -> int:
         nonce = 0
         while True:
-            if self.chain[-1]["block_hash"] != self.last_mined_tip:
+            # if self.chain[-1]["block_hash"] != self.last_mined_tip:
+            if self.current_tip != self.last_mined_tip:
                 print("Chain tip has changed since we started mining. Aborting current mining attempt and starting on new tip.")
                 return -1
             nonce_bytes = nonce.to_bytes(8, byteorder="big")
@@ -421,7 +509,7 @@ class TuDelftBlockchainLab3Community(Community):
         block_hash = self.get_block_hash(prev_hash, txs_hash, timestamp, difficulty, nonce)
         
         genesis_block = {
-            "height": 0,
+            # "height": 0,
             "prev_hash": prev_hash,
             "txs_hash": txs_hash,
             "timestamp": timestamp,
@@ -431,7 +519,10 @@ class TuDelftBlockchainLab3Community(Community):
             "tx_hashes": []
         }
         
-        self.chain.append(genesis_block)
+        # self.chain.append(genesis_block)
+        self.add_block(genesis_block)
+        self.current_tip = block_hash
+        self.genesis = genesis_block
         print(f"Genesis block generated with hash {block_hash.hex()}")
             
             
@@ -494,13 +585,13 @@ class TuDelftBlockchainLab3Community(Community):
             print(f"[GET HEIGHT] Received malformed get chain height message from {pubkey_to_name(peer.public_key.key_to_bin().hex())}. Ignoring.")
             return
         
+        if not self.current_tip or self.current_tip not in self.height:
+            print(f"[GET HEIGHT] Current chain tip is unknown or has invalid height. Cannot respond to get chain height request from {pubkey_to_name(peer.public_key.key_to_bin().hex())}. Ignoring.")
+            return
+        
         request_id = getattr(message, "request_id")
-        height = len(self.chain) - 1
-        # tail = self.chain[-1]
-        # if not hasattr(tail, "block_hash"):
-        #     print(f"Current chain tip block is malformed. Cannot get tip hash. Ignoring get chain height request.")
-        #     return
-        tip_hash = self.chain[-1]["block_hash"]
+        height = self.height[self.current_tip]
+        tip_hash = self.current_tip
         
         response = GetChainHeightResponse(request_id=request_id, height=height, tip_hash=tip_hash)
         self.ez_send(peer, response)
@@ -520,14 +611,22 @@ class TuDelftBlockchainLab3Community(Community):
         
         height = getattr(message, "height")
         
-        if height < 0 or height >= len(self.chain):
+        # if height < 0 or height >= len(self.chain):
+        if height < 0 or height not in self.height.values():
             print(f"[GET BLOCK] Received get block message with invalid height {height} from {pubkey_to_name(peer.public_key.key_to_bin().hex())}. Ignoring.")
             return
         
-        block = self.chain[height]
+        # block = self.chain[height]
+        # block = next((b for b in self.blocks.values() if self.height.get(b["block_hash"], -1) == height), None)
+        active_chain = self.get_chain_blocks(self.current_tip) if self.current_tip else []
+        block = active_chain[height] if height < len(active_chain) else None
+        
+        if not block:
+            print(f"[GET BLOCK] Block at height {height} not found for get block request from {pubkey_to_name(peer.public_key.key_to_bin().hex())}. Ignoring.")
+            return
         
         response = GetBlockResponse(
-            height=block["height"],
+            height=height,
             prev_hash=block["prev_hash"],
             txs_hash=block["txs_hash"],
             timestamp=block["timestamp"],
@@ -543,11 +642,11 @@ class TuDelftBlockchainLab3Community(Community):
         
     @lazy_wrapper(NewBlockBroadcastMessage)
     def handle_new_block_broadcast(self, peer: Peer, message: NewBlockBroadcastMessage) -> None:
-        if not all(hasattr(message, attr) for attr in ["height", "prev_hash", "txs_hash", "timestamp", "difficulty", "nonce", "block_hash", "tx_hashes"]):
+        if not all(hasattr(message, attr) for attr in ["prev_hash", "txs_hash", "timestamp", "difficulty", "nonce", "block_hash", "tx_hashes"]):
             print(f"Received malformed new block broadcast message from {pubkey_to_name(peer.public_key.key_to_bin().hex())}. Ignoring.")
             return
         
-        height = getattr(message, "height")
+        # height = getattr(message, "height")
         prev_hash = getattr(message, "prev_hash")
         txs_hash = getattr(message, "txs_hash")
         timestamp = getattr(message, "timestamp")
@@ -556,7 +655,7 @@ class TuDelftBlockchainLab3Community(Community):
         block_hash = getattr(message, "block_hash")
         tx_hashes = getattr(message, "tx_hashes")
         
-        print(f"[INTRA BLOCK] Received new block broadcast for block hash {block_hash.hex()} at height {height} from {pubkey_to_name(peer.public_key.key_to_bin().hex())}. Block has {len(tx_hashes) // 32} transactions.")
+        print(f"[INTRA BLOCK] Received new block broadcast for block hash {block_hash.hex()} from {pubkey_to_name(peer.public_key.key_to_bin().hex())}. Block has {len(tx_hashes) // 32} transactions.")
         
         if block_hash != self.get_block_hash(prev_hash, txs_hash, timestamp, difficulty, nonce):
             print(f"[INTRA BLOCK] Block hash {block_hash.hex()} does not match computed hash from block data. Ignoring block.")
@@ -578,50 +677,25 @@ class TuDelftBlockchainLab3Community(Community):
         
         # By this point the block hash matches the provided, the difficulty is met, and the hash of the transactions is also valid.
         
+        # TODO: Decide if this is needed
         if any(tx_hashes[i:i+32] in self.validated_tx_hashes for i in range(0, len(tx_hashes), 32)):
             print(f"[INTRA BLOCK] Received block contains transactions that have already been validated. Ignoring block.")
             response = NewBlockBroadcastResponse(success=False, block_hash=block_hash, message="Block contains transactions that have already been validated")
             self.ez_send(peer, response)
             return
         
-        # Must now understand if this block extends, overtakes, or is behind the tip.
+        self.add_block({
+            # "height": height,
+            "prev_hash": prev_hash,
+            "txs_hash": txs_hash,
+            "timestamp": timestamp,
+            "difficulty": difficulty,
+            "nonce": nonce,
+            "block_hash": block_hash,
+            "tx_hashes": [tx_hashes[i:i+32] for i in range(0, len(tx_hashes), 32)]
+        })
         
-        if height < len(self.chain):
-            print(f"[INTRA BLOCK] Received block is at height {height} which is behind current chain height {len(self.chain) - 1}. Ignoring block.")
-            response = NewBlockBroadcastResponse(success=False, block_hash=block_hash, message="Block is behind current chain height")
-            self.ez_send(peer, response)
-            return
-        
-        if height == len(self.chain):
-            if prev_hash != self.chain[-1]["block_hash"]:
-                # TODO: Perhaps naive because it could be extending a fork.
-                print(f"[INTRA BLOCK] Received block does not extend current chain tip. Ignoring block.")
-                response = NewBlockBroadcastResponse(success=False, block_hash=block_hash, message="Block does not extend current chain tip")
-                self.ez_send(peer, response)
-                return
-            
-            print(f"[INTRA BLOCK] Received block extends current chain tip. Adding block to chain.")
-            new_block = {
-                "height": height,
-                "prev_hash": prev_hash,
-                "txs_hash": txs_hash,
-                "timestamp": timestamp,
-                "difficulty": difficulty,
-                "nonce": nonce,
-                "block_hash": block_hash,
-                "tx_hashes": [tx_hashes[i:i+32] for i in range(0, len(tx_hashes), 32)]
-            }
-            self.chain.append(new_block)
-            self.validated_tx_hashes.update(new_block["tx_hashes"])
-            
-            for p in self.get_peers():
-                if p.public_key.key_to_bin() != peer.public_key.key_to_bin():
-                    self.ez_send(p, message)
-                    print(f"[INTRA BLOCK] Re-broadcasted new block with hash {block_hash.hex()} to peer {pubkey_to_name(p.public_key.key_to_bin().hex())}.")
-            
-            return
-        
-        # TODO: FORKING
+        self.validated_tx_hashes.update(tx_hashes[i:i+32] for i in range(0, len(tx_hashes), 32))
     
 
 async def main():
