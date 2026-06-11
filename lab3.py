@@ -253,6 +253,8 @@ class TuDelftBlockchainLab3Community(Community):
         
         self.generate_genesis_block()
         
+        self.validated_tx_hashes = set()
+        
         
     def is_ready(self) -> bool:
         peers = self.get_peers()
@@ -394,6 +396,12 @@ class TuDelftBlockchainLab3Community(Community):
         
         tx_hash = self.get_transaction_hash(sender_key, data, timestamp, signature)
         
+        if tx_hash in self.validated_tx_hashes:
+            print(f"[SUBMIT TX] Received transaction with hash {tx_hash.hex()} from {pubkey_to_name(peer.public_key.key_to_bin().hex())} that has already been validated. Ignoring duplicate transaction.")
+            response = SubmitTransactionResponse(success=False, tx_hash=tx_hash, message="Duplicate transaction")
+            self.ez_send(peer, response)
+            return
+        
         if not valid:
             print(f"[SUBMIT TX] Received invalid transaction from {pubkey_to_name(peer.public_key.key_to_bin().hex())}. Rejecting.")
             response = SubmitTransactionResponse(success=False, tx_hash=tx_hash, message="Invalid transaction")
@@ -432,6 +440,7 @@ class TuDelftBlockchainLab3Community(Community):
                 "tx_hashes": mempool_hashes,
             }
             self.chain.append(new_block)
+            self.validated_tx_hashes.update(mempool_hashes)
             
             print(f"[SUBMIT TX] New block created with hash {block_hash.hex()} containing {len(mempool_copy)} transactions.")
             
@@ -544,6 +553,13 @@ class TuDelftBlockchainLab3Community(Community):
             return
         
         # By this point the block hash matches the provided, the difficulty is met, and the hash of the transactions is also valid.
+        
+        if any(tx_hashes[i:i+32] in self.validated_tx_hashes for i in range(0, len(tx_hashes), 32)):
+            print(f"[INTRA BLOCK] Received block contains transactions that have already been validated. Ignoring block.")
+            response = NewBlockBroadcastResponse(success=False, block_hash=block_hash, message="Block contains transactions that have already been validated")
+            self.ez_send(peer, response)
+            return
+        
         # Must now understand if this block extends, overtakes, or is behind the tip.
         
         if height < len(self.chain):
@@ -572,6 +588,7 @@ class TuDelftBlockchainLab3Community(Community):
                 "tx_hashes": [tx_hashes[i:i+32] for i in range(0, len(tx_hashes), 32)]
             }
             self.chain.append(new_block)
+            self.validated_tx_hashes.update(new_block["tx_hashes"])
             
             for p in self.get_peers():
                 if p.public_key.key_to_bin() != peer.public_key.key_to_bin():
