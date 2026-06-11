@@ -255,14 +255,70 @@ class TuDelftBlockchainLab3Community(Community):
         
         self.validated_tx_hashes = set()
         
-    #     self.mining_interval = 30.0
-    #     self.last_mined_time = 0.0
+        self.mining_interval = 30.0
+        self.mining = False
         self.last_mined_tip = self.chain[-1]["block_hash"]
         
         
-    # def mine(self):
-    #     # Main mining logic goes here, this should be called as periodic task, and logic is similar to the one later on.
-    #     # The tip checking is currently in the nonce finder but the snapshot must be taken here.
+    def mine(self):
+        if self.mining:
+            print("[MINE] Already mining a block. Skipping this mining interval.")
+            return
+        
+        self.mining = True
+        self.last_mined_tip = self.chain[-1]["block_hash"]
+        included_hashes = []
+        for tx in self.mempool:
+            tx_hash = self.get_transaction_hash(*tx)
+            if tx_hash not in self.validated_tx_hashes:
+                included_hashes.append(tx_hash)
+        
+        print(f"[MINE] Creating new block with {len(included_hashes)} transactions.")
+        
+        prev_hash = self.chain[-1]["block_hash"]
+        txs_hash = self.get_txs_hash(included_hashes)
+        timestamp = int(time.time())
+        difficulty = 16
+        nonce = self.find_nonce(prev_hash + txs_hash + timestamp.to_bytes(8, "big") + difficulty.to_bytes(4, "big"), difficulty)
+        
+        if nonce == -1:
+            print("[MINE] Mining aborted due to chain tip change.")
+            self.mining = False
+            return
+        
+        block_hash = self.get_block_hash(prev_hash, txs_hash, timestamp, difficulty, nonce)
+        
+        new_block = {
+            "height": len(self.chain),
+            "prev_hash": prev_hash,
+            "txs_hash": txs_hash,
+            "timestamp": timestamp,
+            "difficulty": difficulty,
+            "nonce": nonce,
+            "block_hash": block_hash,
+            "tx_hashes": included_hashes,
+        }
+        self.chain.append(new_block)
+        self.validated_tx_hashes.update(included_hashes)
+        
+        print(f"[MINE] New block mined with hash {block_hash.hex()} containing {len(included_hashes)} transactions.")
+        
+        broadcast = NewBlockBroadcastMessage(
+            height=new_block["height"],
+            prev_hash=new_block["prev_hash"],
+            txs_hash=new_block["txs_hash"],
+            timestamp=new_block["timestamp"],
+            difficulty=new_block["difficulty"],
+            nonce=new_block["nonce"],
+            block_hash=new_block["block_hash"],
+            tx_hashes=b"".join(included_hashes)
+        )
+        
+        for p in self.get_peers():
+            self.ez_send(p, broadcast)
+            print(f"[MINE] Broadcasted new block with hash {block_hash.hex()} to peer {pubkey_to_name(p.public_key.key_to_bin().hex())}.")
+        
+        self.mining = False
         
         
     def is_ready(self) -> bool:
@@ -314,7 +370,8 @@ class TuDelftBlockchainLab3Community(Community):
             #         return
                 
             #     self.ez_send(server_peer, register_msg)
-                
+            
+            self.register_task("mine", self.mine, interval=self.mining_interval)
             self.cancel_pending_task("start_communication")
 
         self.register_task("start_communication", start_communication, interval=2.0, delay=0)
@@ -428,56 +485,6 @@ class TuDelftBlockchainLab3Community(Community):
             if p.public_key.key_to_bin() != peer.public_key.key_to_bin() and p.public_key.key_to_bin() != self.server_public_key:
                 self.ez_send(p, message)
                 print(f"[SUBMIT TX] Relayed transaction with hash {tx_hash.hex()} to peer {pubkey_to_name(p.public_key.key_to_bin().hex())}.")
-        
-        if len(self.mempool) >= 1:
-            print("[SUBMIT TX] Mempool has 1 transaction. Creating new block...")
-            self.last_mined_tip = self.chain[-1]["block_hash"]
-            mempool_hashes = []
-            for tx in self.mempool:
-                tx_hash = self.get_transaction_hash(*tx)
-                if tx_hash not in self.validated_tx_hashes:
-                    mempool_hashes.append(tx_hash)
-            prev_hash = self.chain[-1]["block_hash"]
-            txs_hash = self.get_txs_hash(mempool_hashes)
-            timestamp = int(time.time())
-            difficulty = 16
-            nonce = self.find_nonce(prev_hash + txs_hash + timestamp.to_bytes(8, "big") + difficulty.to_bytes(4, "big"), difficulty)
-            
-            if nonce == -1:
-                print("[SUBMIT TX] Mining aborted due to chain tip change. Transactions returned to mempool.")
-                return
-            
-            block_hash = self.get_block_hash(prev_hash, txs_hash, timestamp, difficulty, nonce)
-            
-            new_block = {
-                "height": len(self.chain),
-                "prev_hash": prev_hash,
-                "txs_hash": txs_hash,
-                "timestamp": timestamp,
-                "difficulty": difficulty,
-                "nonce": nonce,
-                "block_hash": block_hash,
-                "tx_hashes": mempool_hashes,
-            }
-            self.chain.append(new_block)
-            self.validated_tx_hashes.update(mempool_hashes)
-            
-            print(f"[SUBMIT TX] New block created with hash {block_hash.hex()} containing {len(mempool_hashes)} transactions.")
-            
-            broadcast = NewBlockBroadcastMessage(
-                height=new_block["height"],
-                prev_hash=new_block["prev_hash"],
-                txs_hash=new_block["txs_hash"],
-                timestamp=new_block["timestamp"],
-                difficulty=new_block["difficulty"],
-                nonce=new_block["nonce"],
-                block_hash=new_block["block_hash"],
-                tx_hashes=b"".join(mempool_hashes)
-            )
-            
-            for p in self.get_peers():
-                self.ez_send(p, broadcast)
-                print(f"[SUBMIT TX] Broadcasted new block with hash {block_hash.hex()} to peer {pubkey_to_name(p.public_key.key_to_bin().hex())}.")
             
             
     @lazy_wrapper(GetChainHeightMessage)
