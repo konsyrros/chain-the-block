@@ -398,6 +398,11 @@ class TuDelftBlockchainLab3Community(Community):
         response = SubmitTransactionResponse(success=True, tx_hash=tx_hash, message="Transaction accepted")
         self.ez_send(peer, response)
         
+        for p in self.get_peers():
+            if p.public_key.key_to_bin() != peer.public_key.key_to_bin() and p.public_key.key_to_bin() != self.server_public_key:
+                self.ez_send(p, message)
+                print(f"[SUBMIT TX] Relayed transaction with hash {tx_hash.hex()} to peer {pubkey_to_name(p.public_key.key_to_bin().hex())}.")
+        
         if len(self.mempool) >= 1:
             print("[SUBMIT TX] Mempool has 1 transaction. Creating new block...")
             mempool_copy = self.mempool.copy()
