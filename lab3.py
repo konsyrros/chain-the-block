@@ -369,9 +369,10 @@ class TuDelftBlockchainLab3Community(Community):
             
     @lazy_wrapper(SubmitTransactionMessage)
     def handle_submit_transaction(self, peer: Peer, message: SubmitTransactionMessage) -> None:
-        if peer.public_key.key_to_bin() != self.server_public_key:
-            print(f"[SUBMIT TX] Received message from unknown peer {pubkey_to_name(peer.public_key.key_to_bin().hex())}. Ignoring.")
-            return
+        # Remove this if there is intra community gossip about transactions
+        # if peer.public_key.key_to_bin() != self.server_public_key:
+        #     print(f"[SUBMIT TX] Received message from unknown peer {pubkey_to_name(peer.public_key.key_to_bin().hex())}. Ignoring.")
+        #     return
         
         if not all(hasattr(message, attr) for attr in ["sender_key", "data", "timestamp", "signature"]):
             print(f"[SUBMIT TX] Received malformed submit transaction message from {pubkey_to_name(peer.public_key.key_to_bin().hex())}. Ignoring.")
