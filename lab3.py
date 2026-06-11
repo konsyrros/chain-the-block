@@ -255,6 +255,15 @@ class TuDelftBlockchainLab3Community(Community):
         
         self.validated_tx_hashes = set()
         
+    #     self.mining_interval = 30.0
+    #     self.last_mined_time = 0.0
+        self.last_mined_tip = self.chain[-1]["block_hash"]
+        
+        
+    # def mine(self):
+    #     # Main mining logic goes here, this should be called as periodic task, and logic is similar to the one later on.
+    #     # The tip checking is currently in the nonce finder but the snapshot must be taken here.
+        
         
     def is_ready(self) -> bool:
         peers = self.get_peers()
@@ -338,6 +347,9 @@ class TuDelftBlockchainLab3Community(Community):
     def find_nonce(self, payload: bytes, difficulty: int) -> int:
         nonce = 0
         while True:
+            if self.chain[-1]["block_hash"] != self.last_mined_tip:
+                print("Chain tip has changed since we started mining. Aborting current mining attempt and starting on new tip.")
+                return -1
             nonce_bytes = nonce.to_bytes(8, byteorder="big")
             combined_payload = payload + nonce_bytes
             if self.is_difficult(combined_payload, difficulty):
@@ -419,14 +431,22 @@ class TuDelftBlockchainLab3Community(Community):
         
         if len(self.mempool) >= 1:
             print("[SUBMIT TX] Mempool has 1 transaction. Creating new block...")
-            mempool_copy = self.mempool.copy()
-            self.mempool.clear()
-            mempool_hashes = [self.get_transaction_hash(*tx) for tx in mempool_copy]
+            self.last_mined_tip = self.chain[-1]["block_hash"]
+            mempool_hashes = []
+            for tx in self.mempool:
+                tx_hash = self.get_transaction_hash(*tx)
+                if tx_hash not in self.validated_tx_hashes:
+                    mempool_hashes.append(tx_hash)
             prev_hash = self.chain[-1]["block_hash"]
             txs_hash = self.get_txs_hash(mempool_hashes)
             timestamp = int(time.time())
             difficulty = 16
             nonce = self.find_nonce(prev_hash + txs_hash + timestamp.to_bytes(8, "big") + difficulty.to_bytes(4, "big"), difficulty)
+            
+            if nonce == -1:
+                print("[SUBMIT TX] Mining aborted due to chain tip change. Transactions returned to mempool.")
+                return
+            
             block_hash = self.get_block_hash(prev_hash, txs_hash, timestamp, difficulty, nonce)
             
             new_block = {
@@ -442,7 +462,7 @@ class TuDelftBlockchainLab3Community(Community):
             self.chain.append(new_block)
             self.validated_tx_hashes.update(mempool_hashes)
             
-            print(f"[SUBMIT TX] New block created with hash {block_hash.hex()} containing {len(mempool_copy)} transactions.")
+            print(f"[SUBMIT TX] New block created with hash {block_hash.hex()} containing {len(mempool_hashes)} transactions.")
             
             broadcast = NewBlockBroadcastMessage(
                 height=new_block["height"],
