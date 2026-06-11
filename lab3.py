@@ -56,7 +56,7 @@ PUBLIC_KEYS = [
     "4c69624e61434c504b3a39ee7f7c6d5e4250e41b0a428ccd0ba344716db6c8882d088908739b6fad737c25ecb2419646b6763e87b7307d145919d35df26220f36ed0637b5ff86176ef91"
 ]
 
-BLOCKCHAIN_COMMUNITY_ID_STR = "434c41554449414c414233424c4f434b32363040"
+BLOCKCHAIN_COMMUNITY_ID_STR = "434c41554449414c414233424c4f434b32363050"
 
 
 def pubkey_to_name(pubkey_hex: str) -> str:
@@ -377,9 +377,9 @@ class TuDelftBlockchainLab3Community(Community):
         timestamp = getattr(message, "timestamp")
         signature = getattr(message, "signature")
         
-        if sender_key != peer.public_key.key_to_bin():
-            print(f"[SUBMIT TX] Sender key in message does not match peer public key for {pubkey_to_name(peer.public_key.key_to_bin().hex())}. Ignoring.")
-            return
+        # if sender_key != peer.public_key.key_to_bin():
+        #     print(f"[SUBMIT TX] Sender key in message does not match peer public key for {pubkey_to_name(peer.public_key.key_to_bin().hex())}. Ignoring.")
+        #     return
 
         crypto = ECCrypto()
         sender_key_obj = crypto.key_from_public_bin(sender_key)
@@ -398,15 +398,15 @@ class TuDelftBlockchainLab3Community(Community):
         response = SubmitTransactionResponse(success=True, tx_hash=tx_hash, message="Transaction accepted")
         self.ez_send(peer, response)
         
-        if len(self.mempool) >= 10:
-            print("[SUBMIT TX] Mempool has 10 transactions. Creating new block...")
+        if len(self.mempool) >= 1:
+            print("[SUBMIT TX] Mempool has 1 transaction. Creating new block...")
             mempool_copy = self.mempool.copy()
             self.mempool.clear()
             mempool_hashes = [self.get_transaction_hash(*tx) for tx in mempool_copy]
             prev_hash = self.chain[-1]["block_hash"]
             txs_hash = self.get_txs_hash(mempool_hashes)
             timestamp = int(time.time())
-            difficulty = 4
+            difficulty = 16
             nonce = self.find_nonce(prev_hash + txs_hash + timestamp.to_bytes(8, "big") + difficulty.to_bytes(4, "big"), difficulty)
             block_hash = self.get_block_hash(prev_hash, txs_hash, timestamp, difficulty, nonce)
             
@@ -558,7 +558,7 @@ class TuDelftBlockchainLab3Community(Community):
             
             return
         
-        # FORKING
+        # TODO: FORKING
     
 
 async def main():
