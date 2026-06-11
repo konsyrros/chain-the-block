@@ -131,6 +131,11 @@ class NewBlockBroadcastMessage(VariablePayload):
     format_list = ["q", "varlenH", "varlenH", "q", "q", "q", "varlenH", "varlenH"]
     names = ["height", "prev_hash", "txs_hash", "timestamp", "difficulty", "nonce", "block_hash", "tx_hashes"]
     
+class NewBlockBroadcastResponse(VariablePayload):
+    msg_id = 102
+    format_list = ["?", "varlenH", "varlenHutf8"]
+    names = ["success", "block_hash", "message"]
+    
     
 class TuDelftBlockchainLab3RegistrationCommunity(Community):
     community_id = bytes.fromhex("4c616233426c6f636b636861696e323032365057")
@@ -521,14 +526,20 @@ class TuDelftBlockchainLab3Community(Community):
         
         if block_hash != self.get_block_hash(prev_hash, txs_hash, timestamp, difficulty, nonce):
             print(f"[INTRA BLOCK] Block hash {block_hash.hex()} does not match computed hash from block data. Ignoring block.")
+            response = NewBlockBroadcastResponse(success=False, block_hash=block_hash, message="Block hash does not match computed hash")
+            self.ez_send(peer, response)
             return
         
         if not self.is_difficult(prev_hash + txs_hash + timestamp.to_bytes(8, "big") + difficulty.to_bytes(4, "big") + nonce.to_bytes(8, "big"), difficulty):
             print(f"[INTRA BLOCK] Block does not meet difficulty requirement. Ignoring block.")
+            response = NewBlockBroadcastResponse(success=False, block_hash=block_hash, message="Block does not meet difficulty requirement")
+            self.ez_send(peer, response)
             return
         
         if txs_hash != hashlib.sha256(tx_hashes).digest():
             print(f"[INTRA BLOCK] Transactions hash does not match computed hash from transaction hashes. Ignoring block.")
+            response = NewBlockBroadcastResponse(success=False, block_hash=block_hash, message="Transactions hash does not match computed hash")
+            self.ez_send(peer, response)
             return
         
         # By this point the block hash matches the provided, the difficulty is met, and the hash of the transactions is also valid.
@@ -536,11 +547,16 @@ class TuDelftBlockchainLab3Community(Community):
         
         if height < len(self.chain):
             print(f"[INTRA BLOCK] Received block is at height {height} which is behind current chain height {len(self.chain) - 1}. Ignoring block.")
+            response = NewBlockBroadcastResponse(success=False, block_hash=block_hash, message="Block is behind current chain height")
+            self.ez_send(peer, response)
             return
         
         if height == len(self.chain):
             if prev_hash != self.chain[-1]["block_hash"]:
+                # TODO: Perhaps naive because it could be extending a fork.
                 print(f"[INTRA BLOCK] Received block does not extend current chain tip. Ignoring block.")
+                response = NewBlockBroadcastResponse(success=False, block_hash=block_hash, message="Block does not extend current chain tip")
+                self.ez_send(peer, response)
                 return
             
             print(f"[INTRA BLOCK] Received block extends current chain tip. Adding block to chain.")
