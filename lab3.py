@@ -2,7 +2,9 @@
 
 import argparse
 
+import asyncio
 from asyncio import run
+import threading
 
 from ipv8.community import Community, CommunitySettings
 from ipv8.messaging.lazy_payload import VariablePayload
@@ -266,7 +268,7 @@ class TuDelftBlockchainLab3Community(Community):
         self.last_mined_tip = None
         
         
-    def mine(self):
+    async def mine(self):
         if self.mining:
             print("[MINE] Already mining a block. Skipping this mining interval.")
             return
@@ -287,11 +289,20 @@ class TuDelftBlockchainLab3Community(Community):
         
         print(f"[MINE] Creating new block with {len(included_hashes)} transactions.")
         
+        cancel_event = threading.Event()
+        self.cancel_mining_event = cancel_event
+        
         prev_hash = self.last_mined_tip
         txs_hash = self.get_txs_hash(included_hashes)
         timestamp = int(time.time())
         difficulty = 16
-        nonce = self.find_nonce(prev_hash + txs_hash + timestamp.to_bytes(8, "big") + difficulty.to_bytes(4, "big"), difficulty)
+        
+        # nonce = await self.find_nonce(prev_hash + txs_hash + timestamp.to_bytes(8, "big") + difficulty.to_bytes(4, "big"), difficulty)
+        loop = asyncio.get_event_loop()
+        nonce = await loop.run_in_executor(
+            None, 
+            lambda: self.find_nonce(prev_hash + txs_hash + timestamp.to_bytes(8, "big") + difficulty.to_bytes(4, "big"), difficulty, cancel_event)
+        )
         
         if nonce == -1:
             print("[MINE] Mining aborted due to chain tip change.")
@@ -389,6 +400,9 @@ class TuDelftBlockchainLab3Community(Community):
         if self.is_complete_chain(highest_tip) and self.height[highest_tip] > current_tip_height:
             print(f"Switching chain tip from {self.current_tip.hex() if self.current_tip else 'None'} at height {current_tip_height} to new tip {highest_tip.hex()} at height {self.height[highest_tip]} due to new block.")
             self.current_tip = highest_tip
+            
+            if hasattr(self, 'cancel_mining_event') and self.cancel_mining_event:
+                self.cancel_mining_event.set()
             
         print(f"Added block with hash {block_hash.hex()} at height {self.height[block_hash]}. Current tip is {self.current_tip.hex() if self.current_tip else 'None'} at height {self.height[self.current_tip] if self.current_tip in self.height else 'Unknown'}. Parent {prev_hash.hex()}, {len(self.children[prev_hash])} children.")
 
@@ -492,12 +506,11 @@ class TuDelftBlockchainLab3Community(Community):
         return hash_int < (1 << (256 - difficulty))
     
     
-    def find_nonce(self, payload: bytes, difficulty: int) -> int:
+    def find_nonce(self, payload: bytes, difficulty: int, cancel_event: threading.Event) -> int:
         nonce = 0
         while True:
-            # if self.chain[-1]["block_hash"] != self.last_mined_tip:
-            if self.current_tip != self.last_mined_tip:
-                print("Chain tip has changed since we started mining. Aborting current mining attempt and starting on new tip.")
+            if cancel_event.is_set():
+                print("Mining cancelled.")
                 return -1
             nonce_bytes = nonce.to_bytes(8, byteorder="big")
             combined_payload = payload + nonce_bytes
@@ -562,7 +575,13 @@ class TuDelftBlockchainLab3Community(Community):
         
         if tx_hash in self.validated_tx_hashes:
             print(f"[SUBMIT TX] Received transaction with hash {tx_hash.hex()} from {pubkey_to_name(peer.public_key.key_to_bin().hex())} that has already been validated. Ignoring duplicate transaction.")
-            response = SubmitTransactionResponse(success=False, tx_hash=tx_hash, message="Duplicate transaction")
+            response = SubmitTransactionResponse(success=False, tx_hash=tx_hash, message="Duplicate transaction already validated")
+            self.ez_send(peer, response)
+            return
+        
+        if any(tx_hash == self.get_transaction_hash(*tx) for tx in self.mempool):
+            print(f"[SUBMIT TX] Received transaction with hash {tx_hash.hex()} from {pubkey_to_name(peer.public_key.key_to_bin().hex())} that is already in the mempool. Ignoring duplicate transaction.")
+            response = SubmitTransactionResponse(success=False, tx_hash=tx_hash, message="Duplicate transaction in mempool")
             self.ez_send(peer, response)
             return
         
