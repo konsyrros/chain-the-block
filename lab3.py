@@ -4,7 +4,6 @@ import argparse
 
 import asyncio
 from asyncio import run
-import threading
 
 from ipv8.community import Community, CommunitySettings
 from ipv8.messaging.lazy_payload import VariablePayload
@@ -289,20 +288,11 @@ class TuDelftBlockchainLab3Community(Community):
         
         print(f"[MINE] Creating new block with {len(included_hashes)} transactions.")
         
-        cancel_event = threading.Event()
-        self.cancel_mining_event = cancel_event
-        
         prev_hash = self.last_mined_tip
         txs_hash = self.get_txs_hash(included_hashes)
         timestamp = int(time.time())
         difficulty = 16
-        
-        # nonce = await self.find_nonce(prev_hash + txs_hash + timestamp.to_bytes(8, "big") + difficulty.to_bytes(4, "big"), difficulty)
-        loop = asyncio.get_event_loop()
-        nonce = await loop.run_in_executor(
-            None, 
-            lambda: self.find_nonce(prev_hash + txs_hash + timestamp.to_bytes(8, "big") + difficulty.to_bytes(4, "big"), difficulty, cancel_event)
-        )
+        nonce = await self.find_nonce(prev_hash + txs_hash + timestamp.to_bytes(8, "big") + difficulty.to_bytes(4, "big"), difficulty)
         
         if nonce == -1:
             print("[MINE] Mining aborted due to chain tip change.")
@@ -400,9 +390,6 @@ class TuDelftBlockchainLab3Community(Community):
         if self.is_complete_chain(highest_tip) and self.height[highest_tip] > current_tip_height:
             print(f"Switching chain tip from {self.current_tip.hex() if self.current_tip else 'None'} at height {current_tip_height} to new tip {highest_tip.hex()} at height {self.height[highest_tip]} due to new block.")
             self.current_tip = highest_tip
-            
-            if hasattr(self, 'cancel_mining_event') and self.cancel_mining_event:
-                self.cancel_mining_event.set()
             
         print(f"Added block with hash {block_hash.hex()} at height {self.height[block_hash]}. Current tip is {self.current_tip.hex() if self.current_tip else 'None'} at height {self.height[self.current_tip] if self.current_tip in self.height else 'Unknown'}. Parent {prev_hash.hex()}, {len(self.children[prev_hash])} children.")
 
@@ -506,17 +493,19 @@ class TuDelftBlockchainLab3Community(Community):
         return hash_int < (1 << (256 - difficulty))
     
     
-    def find_nonce(self, payload: bytes, difficulty: int, cancel_event: threading.Event) -> int:
+    async def find_nonce(self, payload: bytes, difficulty: int) -> int:
         nonce = 0
         while True:
-            if cancel_event.is_set():
-                print("Mining cancelled.")
+            if self.current_tip != self.last_mined_tip:
+                print("Chain tip has changed since we started mining. Aborting current mining attempt.")
                 return -1
             nonce_bytes = nonce.to_bytes(8, byteorder="big")
             combined_payload = payload + nonce_bytes
             if self.is_difficult(combined_payload, difficulty):
                 return nonce
             nonce += 1
+            if nonce % 1000 == 0:
+                await asyncio.sleep(0)
             
             
     def generate_genesis_block(self) -> None:
@@ -589,6 +578,7 @@ class TuDelftBlockchainLab3Community(Community):
             print(f"[SUBMIT TX] Received invalid transaction from {pubkey_to_name(peer.public_key.key_to_bin().hex())}. Rejecting.")
             response = SubmitTransactionResponse(success=False, tx_hash=tx_hash, message="Invalid transaction")
             self.ez_send(peer, response)
+            return
         
         print(f"[SUBMIT TX] Received valid transaction with hash {tx_hash.hex()} from {pubkey_to_name(peer.public_key.key_to_bin().hex())}. Adding to mempool.")
         self.mempool.append((sender_key, data, timestamp, signature))
