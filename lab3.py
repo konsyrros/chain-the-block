@@ -339,7 +339,11 @@ class TuDelftBlockchainLab3Community(Community):
         height = 0
         current_hash = block_hash
         while current_hash in self.parent:
+            print(f"Parent of block {current_hash.hex()} is {self.parent[current_hash].hex()}.")
             current_hash = self.parent[current_hash]
+            if current_hash == bytes.fromhex("00" * 32):
+                print(f"Reached genesis block while calculating height for block {block_hash.hex()}.")
+                break
             if current_hash in self.height:
                 height += self.height[current_hash] + 1
                 break
@@ -386,7 +390,7 @@ class TuDelftBlockchainLab3Community(Community):
             print(f"Switching chain tip from {self.current_tip.hex() if self.current_tip else 'None'} at height {current_tip_height} to new tip {highest_tip.hex()} at height {self.height[highest_tip]} due to new block.")
             self.current_tip = highest_tip
             
-        print(f"Added block with hash {block_hash.hex()} at height {self.height[block_hash]}. Current tip is {self.current_tip.hex() if self.current_tip else 'None'} at height {self.height[self.current_tip] if self.current_tip in self.height else 'Unknown'}.")
+        print(f"Added block with hash {block_hash.hex()} at height {self.height[block_hash]}. Current tip is {self.current_tip.hex() if self.current_tip else 'None'} at height {self.height[self.current_tip] if self.current_tip in self.height else 'Unknown'}. Parent {prev_hash.hex()}, {len(self.children[prev_hash])} children.")
 
 
     def get_chain_blocks(self, tip_hash):
