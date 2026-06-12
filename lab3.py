@@ -240,6 +240,7 @@ class TuDelftBlockchainLab3Community(Community):
         self.add_message_handler(GetChainHeightMessage, self.handle_get_chain_height)
         self.add_message_handler(GetBlockMessage, self.handle_get_block)
         self.add_message_handler(NewBlockBroadcastMessage, self.handle_new_block_broadcast)
+        self.add_message_handler(SubmitTransactionResponse, self.handle_submit_transaction_response)
         
         self.member1_key = self.my_peer.public_key.key_to_bin().hex()
         self.member2_key = settings.member2_key
@@ -384,6 +385,8 @@ class TuDelftBlockchainLab3Community(Community):
         if self.is_complete_chain(highest_tip) and self.height[highest_tip] > current_tip_height:
             print(f"Switching chain tip from {self.current_tip.hex() if self.current_tip else 'None'} at height {current_tip_height} to new tip {highest_tip.hex()} at height {self.height[highest_tip]} due to new block.")
             self.current_tip = highest_tip
+            
+        print(f"Added block with hash {block_hash.hex()} at height {self.height[block_hash]}. Current tip is {self.current_tip.hex() if self.current_tip else 'None'} at height {self.height[self.current_tip] if self.current_tip in self.height else 'Unknown'}.")
 
 
     def get_chain_blocks(self, tip_hash):
@@ -696,6 +699,11 @@ class TuDelftBlockchainLab3Community(Community):
         })
         
         self.validated_tx_hashes.update(tx_hashes[i:i+32] for i in range(0, len(tx_hashes), 32))
+        
+        
+    @lazy_wrapper(SubmitTransactionResponse)
+    def handle_submit_transaction_response(self, peer: Peer, message: SubmitTransactionResponse) -> None:
+        pass
     
 
 async def main():
