@@ -143,15 +143,16 @@ class TuDelftBlockchainLab3RegistrationCommunity(Community):
     
     def __init__(self, settings: BlockchainRegistrationSettings) -> None:
         super().__init__(settings)
-        
+
         self.add_message_handler(RegisterResponse, self.handle_register_response)
-        
+
         self.group_id = settings.group_id
         self.member1_key = self.my_peer.public_key.key_to_bin().hex()
         self.member2_key = settings.member2_key
         self.member3_key = settings.member3_key
-        
+
         self.registered = False
+        self.registration_sent = False
         
         
     def is_ready(self) -> bool:
@@ -188,23 +189,23 @@ class TuDelftBlockchainLab3RegistrationCommunity(Community):
         async def start_communication() -> None:
             print("\nStarting registration communication task...")
             print(f"Found {len(self.get_peers())} peers.")
-            
+
             if not self.is_ready():
                 print("Not all required peers are present. Waiting for peers to connect for registration...")
                 return
-            
-            if not self.registered:                
-                register_msg = RegisterMessage(group_id=self.group_id, community_id=bytes.fromhex(BLOCKCHAIN_COMMUNITY_ID_STR))
-                server_peer = self.get_peer_by_pubkey(self.server_public_key.hex())
-                if not server_peer:
-                    print("Server peer not found. Cannot send register message.")
-                    return
-                
-                print("Sending register message to server...")
-                
-                self.ez_send(server_peer, register_msg)
-                
-            self.cancel_pending_task("start_communication")
+
+            if self.registered or self.registration_sent:
+                return
+
+            server_peer = self.get_peer_by_pubkey(self.server_public_key.hex())
+            if not server_peer:
+                print("Server peer not found. Cannot send register message.")
+                return
+
+            register_msg = RegisterMessage(group_id=self.group_id, community_id=bytes.fromhex(BLOCKCHAIN_COMMUNITY_ID_STR))
+            print("Sending register message to server...")
+            self.ez_send(server_peer, register_msg)
+            self.registration_sent = True
 
         self.register_task("start_communication", start_communication, interval=2.0, delay=0)
         
@@ -226,7 +227,13 @@ class TuDelftBlockchainLab3RegistrationCommunity(Community):
         if success:
             print("===== Registration successful. =====")
             self.registered = True
-    
+            self.registration_sent = False
+
+    def request_reregister(self) -> None:
+        print("[REG] Re-registration requested by blockchain community becoming ready.")
+        self.registered = False
+        self.registration_sent = False
+
 
 class TuDelftBlockchainLab3Community(Community):
     community_id = bytes.fromhex(BLOCKCHAIN_COMMUNITY_ID_STR)
@@ -246,7 +253,9 @@ class TuDelftBlockchainLab3Community(Community):
         self.member1_key = self.my_peer.public_key.key_to_bin().hex()
         self.member2_key = settings.member2_key
         self.member3_key = settings.member3_key
-        
+
+        self.registration_community = None
+
         self.mempool = []
         self.current_tip = None
         
@@ -386,10 +395,12 @@ class TuDelftBlockchainLab3Community(Community):
         self.connect_orphans(block_hash) # Connect any orphans that have this block as their parent
         
         current_tip_height = self.height[self.current_tip] if self.current_tip in self.height else -1
-        highest_tip = max(self.tips, key=lambda h: self.height[h])
-        if self.is_complete_chain(highest_tip) and self.height[highest_tip] > current_tip_height:
-            print(f"Switching chain tip from {self.current_tip.hex() if self.current_tip else 'None'} at height {current_tip_height} to new tip {highest_tip.hex()} at height {self.height[highest_tip]} due to new block.")
-            self.current_tip = highest_tip
+        complete_tips = [h for h in self.tips if self.is_complete_chain(h)]
+        if complete_tips:
+            best_tip = max(complete_tips, key=lambda h: self.height[h])
+            if self.height[best_tip] > current_tip_height:
+                print(f"Switching chain tip from {self.current_tip.hex() if self.current_tip else 'None'} at height {current_tip_height} to new tip {best_tip.hex()} at height {self.height[best_tip]} due to new block.")
+                self.current_tip = best_tip
             
         print(f"Added block with hash {block_hash.hex()} at height {self.height[block_hash]}. Current tip is {self.current_tip.hex() if self.current_tip else 'None'} at height {self.height[self.current_tip] if self.current_tip in self.height else 'Unknown'}. Parent {prev_hash.hex()}, {len(self.children[prev_hash])} children.")
 
@@ -451,19 +462,11 @@ class TuDelftBlockchainLab3Community(Community):
             if not self.is_ready():
                 print("Not all required peers are present. Waiting for peers to connect...")
                 return
-            
-            # if not self.registered:
-            #     print("Sending register message to server...")
-                
-            #     register_msg = RegisterMessage(member1_key=bytes.fromhex(self.member1_key), member2_key=bytes.fromhex(self.member2_key), member3_key=bytes.fromhex(self.member3_key))
-            #     server_peer = self.get_peer_by_pubkey(self.server_public_key.hex())
-            #     if not server_peer:
-            #         print("Server peer not found. Cannot send register message.")
-            #         return
-                
-            #     self.ez_send(server_peer, register_msg)
-            
-            self.register_task("mine", self.mine, interval=self.mining_interval)
+
+            if self.registration_community:
+                self.registration_community.request_reregister()
+
+            self.register_task("mine", self.mine, interval=self.mining_interval, delay=0)
             self.cancel_pending_task("start_communication")
 
         self.register_task("start_communication", start_communication, interval=2.0, delay=0)
@@ -555,25 +558,25 @@ class TuDelftBlockchainLab3Community(Community):
         #     print(f"[SUBMIT TX] Sender key in message does not match peer public key for {pubkey_to_name(peer.public_key.key_to_bin().hex())}. Ignoring.")
         #     return
 
+        tx_hash = self.get_transaction_hash(sender_key, data, timestamp, signature)
+
+        if tx_hash in self.validated_tx_hashes:
+            print(f"[SUBMIT TX] Transaction {tx_hash.hex()} from {pubkey_to_name(peer.public_key.key_to_bin().hex())} already in chain. Returning success.")
+            response = SubmitTransactionResponse(success=True, tx_hash=tx_hash, message="Transaction already included in chain")
+            self.ez_send(peer, response)
+            return
+
+        if any(tx_hash == self.get_transaction_hash(*tx) for tx in self.mempool):
+            print(f"[SUBMIT TX] Transaction {tx_hash.hex()} from {pubkey_to_name(peer.public_key.key_to_bin().hex())} already in mempool. Returning success.")
+            response = SubmitTransactionResponse(success=True, tx_hash=tx_hash, message="Transaction already in mempool")
+            self.ez_send(peer, response)
+            return
+
         crypto = ECCrypto()
         sender_key_obj = crypto.key_from_public_bin(sender_key)
         concat = sender_key + data + timestamp.to_bytes(8, "big")
         valid = crypto.is_valid_signature(sender_key_obj, concat, signature)
-        
-        tx_hash = self.get_transaction_hash(sender_key, data, timestamp, signature)
-        
-        if tx_hash in self.validated_tx_hashes:
-            print(f"[SUBMIT TX] Received transaction with hash {tx_hash.hex()} from {pubkey_to_name(peer.public_key.key_to_bin().hex())} that has already been validated. Ignoring duplicate transaction.")
-            response = SubmitTransactionResponse(success=False, tx_hash=tx_hash, message="Duplicate transaction already validated")
-            self.ez_send(peer, response)
-            return
-        
-        if any(tx_hash == self.get_transaction_hash(*tx) for tx in self.mempool):
-            print(f"[SUBMIT TX] Received transaction with hash {tx_hash.hex()} from {pubkey_to_name(peer.public_key.key_to_bin().hex())} that is already in the mempool. Ignoring duplicate transaction.")
-            response = SubmitTransactionResponse(success=False, tx_hash=tx_hash, message="Duplicate transaction in mempool")
-            self.ez_send(peer, response)
-            return
-        
+
         if not valid:
             print(f"[SUBMIT TX] Received invalid transaction from {pubkey_to_name(peer.public_key.key_to_bin().hex())}. Rejecting.")
             response = SubmitTransactionResponse(success=False, tx_hash=tx_hash, message="Invalid transaction")
@@ -692,14 +695,7 @@ class TuDelftBlockchainLab3Community(Community):
             return
         
         # By this point the block hash matches the provided, the difficulty is met, and the hash of the transactions is also valid.
-        
-        # TODO: Decide if this is needed
-        if any(tx_hashes[i:i+32] in self.validated_tx_hashes for i in range(0, len(tx_hashes), 32)):
-            print(f"[INTRA BLOCK] Received block contains transactions that have already been validated. Ignoring block.")
-            response = NewBlockBroadcastResponse(success=False, block_hash=block_hash, message="Block contains transactions that have already been validated")
-            self.ez_send(peer, response)
-            return
-        
+
         self.add_block({
             # "height": height,
             "prev_hash": prev_hash,
@@ -756,6 +752,12 @@ async def main():
         }
     )
     await ipv8.start()
+
+    blockchain_comm = next((o for o in ipv8.overlays if isinstance(o, TuDelftBlockchainLab3Community)), None)
+    reg_comm = next((o for o in ipv8.overlays if isinstance(o, TuDelftBlockchainLab3RegistrationCommunity)), None)
+    if blockchain_comm and reg_comm:
+        blockchain_comm.registration_community = reg_comm
+
     await run_forever()
 
 
