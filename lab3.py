@@ -49,37 +49,36 @@ loggerreg = logging.getLogger("TuDelftBlockchainLab3RegistrationCommunity")
 loggerreg.addFilter(IgnoreUnsupportedCurve())
 
 
-PUBLIC_KEYS = [
-    "4c69624e61434c504b3a4924a5ac3d83e3128007c5a349dcbda9396f45fc0331f4cd84cf5b7ec3f7b20339cafc465a0f36ddb65c4295953d01327921d7ab4ea5a7e69dcb5e16b96e0ca3",
-    "4c69624e61434c504b3a39ee7f7c6d5e4250e41b0a428ccd0ba344716db6c8882d088908739b6fad737c25ecb2419646b6763e87b7307d145919d35df26220f36ed0637b5ff86176ef91"
-]
+DEFAULT_MEMBER2_KEY = "4c69624e61434c504b3a4924a5ac3d83e3128007c5a349dcbda9396f45fc0331f4cd84cf5b7ec3f7b20339cafc465a0f36ddb65c4295953d01327921d7ab4ea5a7e69dcb5e16b96e0ca3"
+DEFAULT_MEMBER2_NAME = "CLAUDIA"
+DEFAULT_MEMBER3_KEY = "4c69624e61434c504b3a39ee7f7c6d5e4250e41b0a428ccd0ba344716db6c8882d088908739b6fad737c25ecb2419646b6763e87b7307d145919d35df26220f36ed0637b5ff86176ef91"
+DEFAULT_MEMBER3_NAME = "AYUSH"
+DEFAULT_SERVER_KEY = "4c69624e61434c504b3ae3fc099fb56ca3b5e1de9a1c843387f2acdbb78b1bd4350ffde518068a0d246344b10d0d8c355fd0d76873e7d7f7838f3715e025af08f791324495e083331ce6"
+DEFAULT_REG_COMMUNITY_ID = "4c616233426c6f636b636861696e323032365057"
+DEFAULT_BLOCKCHAIN_COMMUNITY_ID = "6b3024744024634c407540795524683477347233"
+DEFAULT_GROUP_ID = "20abc108c3d58494"
 
-BLOCKCHAIN_COMMUNITY_ID_STR = "6b3024744024634c407540795524683477347233"
 
-
-def pubkey_to_name(pubkey_hex: str) -> str:
-    if pubkey_hex == "4c69624e61434c504b3ae3fc099fb56ca3b5e1de9a1c843387f2acdbb78b1bd4350ffde518068a0d246344b10d0d8c355fd0d76873e7d7f7838f3715e025af08f791324495e083331ce6":
-        return "SERVER"
-    elif pubkey_hex == PUBLIC_KEYS[0]:
-        return "CLAUDIA"
-    elif len(PUBLIC_KEYS) > 1 and pubkey_hex == PUBLIC_KEYS[1]:
-        return "AYUSH"
-    else:
-        return f"Unknown({pubkey_hex[:8]}...)"
+def pubkey_to_name(pubkey_hex: str, names: dict) -> str:
+    return names.get(pubkey_hex, f"Unknown({pubkey_hex[:8]}...)")
 
 
 class BlockchainRegistrationSettings(CommunitySettings):
-    def __init__(self, group_id = "", member2_key: str = "", member3_key: str = "", **kwargs):
+    def __init__(self, group_id="", member2_key="", member2_name="Member2", member3_key="", member3_name="Member3", **kwargs):
         super().__init__(**kwargs)
         self.group_id = group_id
         self.member2_key = member2_key
+        self.member2_name = member2_name
         self.member3_key = member3_key
+        self.member3_name = member3_name
 
 class BlockchainSettings(CommunitySettings):
-    def __init__(self, member2_key: str = "", member3_key: str = "", **kwargs):
+    def __init__(self, member2_key="", member2_name="Member2", member3_key="", member3_name="Member3", **kwargs):
         super().__init__(**kwargs)
         self.member2_key = member2_key
+        self.member2_name = member2_name
         self.member3_key = member3_key
+        self.member3_name = member3_name
         
 # Registration Messages (Part 1)
 class RegisterMessage(VariablePayload):
@@ -129,15 +128,11 @@ class NewBlockBroadcastMessage(VariablePayload):
     format_list = ["varlenH", "varlenH", "q", "q", "q", "varlenH", "varlenH"]
     names = ["prev_hash", "txs_hash", "timestamp", "difficulty", "nonce", "block_hash", "tx_hashes"]
     
-class NewBlockBroadcastResponse(VariablePayload):
-    msg_id = 102
-    format_list = ["?", "varlenH", "varlenHutf8"]
-    names = ["success", "block_hash", "message"]
-    
-    
+
+
 class TuDelftBlockchainLab3RegistrationCommunity(Community):
-    community_id = bytes.fromhex("4c616233426c6f636b636861696e323032365057")
-    server_public_key = bytes.fromhex("4c69624e61434c504b3ae3fc099fb56ca3b5e1de9a1c843387f2acdbb78b1bd4350ffde518068a0d246344b10d0d8c355fd0d76873e7d7f7838f3715e025af08f791324495e083331ce6")
+    community_id = bytes.fromhex(DEFAULT_REG_COMMUNITY_ID)
+    server_public_key = bytes.fromhex(DEFAULT_SERVER_KEY)
     settings_class = BlockchainRegistrationSettings
     
     
@@ -149,10 +144,20 @@ class TuDelftBlockchainLab3RegistrationCommunity(Community):
         self.group_id = settings.group_id
         self.member1_key = self.my_peer.public_key.key_to_bin().hex()
         self.member2_key = settings.member2_key
+        self.member2_name = settings.member2_name
         self.member3_key = settings.member3_key
+        self.member3_name = settings.member3_name
 
         self.registered = False
         self.registration_sent = False
+
+    def peer_name(self, pubkey_hex: str) -> str:
+        return pubkey_to_name(pubkey_hex, {
+            self.server_public_key.hex(): "SERVER",
+            self.member1_key: "ME",
+            self.member2_key: self.member2_name,
+            self.member3_key: self.member3_name,
+        })
         
         
     def is_ready(self) -> bool:
@@ -202,7 +207,7 @@ class TuDelftBlockchainLab3RegistrationCommunity(Community):
                 print("Server peer not found. Cannot send register message.")
                 return
 
-            register_msg = RegisterMessage(group_id=self.group_id, community_id=bytes.fromhex(BLOCKCHAIN_COMMUNITY_ID_STR))
+            register_msg = RegisterMessage(group_id=self.group_id, community_id=TuDelftBlockchainLab3Community.community_id)
             print("Sending register message to server...")
             self.ez_send(server_peer, register_msg)
             self.registration_sent = True
@@ -236,44 +241,54 @@ class TuDelftBlockchainLab3RegistrationCommunity(Community):
 
 
 class TuDelftBlockchainLab3Community(Community):
-    community_id = bytes.fromhex(BLOCKCHAIN_COMMUNITY_ID_STR)
-    server_public_key = bytes.fromhex("4c69624e61434c504b3ae3fc099fb56ca3b5e1de9a1c843387f2acdbb78b1bd4350ffde518068a0d246344b10d0d8c355fd0d76873e7d7f7838f3715e025af08f791324495e083331ce6")
+    community_id = bytes.fromhex(DEFAULT_BLOCKCHAIN_COMMUNITY_ID)
+    server_public_key = bytes.fromhex(DEFAULT_SERVER_KEY)
     settings_class = BlockchainSettings
     
     
     def __init__(self, settings: BlockchainSettings) -> None:
         super().__init__(settings)
-        
+
         self.add_message_handler(SubmitTransactionMessage, self.handle_submit_transaction)
         self.add_message_handler(GetChainHeightMessage, self.handle_get_chain_height)
         self.add_message_handler(GetBlockMessage, self.handle_get_block)
         self.add_message_handler(NewBlockBroadcastMessage, self.handle_new_block_broadcast)
         self.add_message_handler(SubmitTransactionResponse, self.handle_submit_transaction_response)
-        
+
         self.member1_key = self.my_peer.public_key.key_to_bin().hex()
         self.member2_key = settings.member2_key
+        self.member2_name = settings.member2_name
         self.member3_key = settings.member3_key
+        self.member3_name = settings.member3_name
 
-        self.registration_community = None
+        self.registration_community: TuDelftBlockchainLab3RegistrationCommunity | None = None
 
         self.mempool = []
         self.current_tip = None
-        
+
         self.blocks = {}    # all the blocks, including orphans, by hash
         self.children = {}  # mapping of a block hash to its children hashes
         self.tips = set()   # set of block hashes with no children
         self.parent = {}    # mapping of a block hash to its parent hash
         self.height = {}    # mapping of a block hash to its current height
-        
+
         self.genesis = None
-        
+
         self.generate_genesis_block()
-        
+
         self.validated_tx_hashes = set()
-        
+
         self.mining_interval = 30.0
         self.mining = False
         self.last_mined_tip = None
+
+    def peer_name(self, pubkey_hex: str) -> str:
+        return pubkey_to_name(pubkey_hex, {
+            self.server_public_key.hex(): "SERVER",
+            self.member1_key: "ME",
+            self.member2_key: self.member2_name,
+            self.member3_key: self.member3_name,
+        })
         
         
     async def mine(self):
@@ -339,7 +354,7 @@ class TuDelftBlockchainLab3Community(Community):
         
         for p in self.get_peers():
             self.ez_send(p, broadcast)
-            print(f"[MINE] Broadcasted new block with hash {block_hash.hex()} to peer {pubkey_to_name(p.public_key.key_to_bin().hex())}.")
+            print(f"[MINE] Broadcasted new block with hash {block_hash.hex()} to peer {self.peer_name(p.public_key.key_to_bin().hex())}.")
         
         self.mining = False
         
@@ -542,11 +557,11 @@ class TuDelftBlockchainLab3Community(Community):
     def handle_submit_transaction(self, peer: Peer, message: SubmitTransactionMessage) -> None:
         # Remove this if there is intra community gossip about transactions
         # if peer.public_key.key_to_bin() != self.server_public_key:
-        #     print(f"[SUBMIT TX] Received message from unknown peer {pubkey_to_name(peer.public_key.key_to_bin().hex())}. Ignoring.")
+        #     print(f"[SUBMIT TX] Received message from unknown peer {self.peer_name(peer.public_key.key_to_bin().hex())}. Ignoring.")
         #     return
         
         if not all(hasattr(message, attr) for attr in ["sender_key", "data", "timestamp", "signature"]):
-            print(f"[SUBMIT TX] Received malformed submit transaction message from {pubkey_to_name(peer.public_key.key_to_bin().hex())}. Ignoring.")
+            print(f"[SUBMIT TX] Received malformed submit transaction message from {self.peer_name(peer.public_key.key_to_bin().hex())}. Ignoring.")
             return
         
         sender_key = getattr(message, "sender_key")
@@ -555,19 +570,19 @@ class TuDelftBlockchainLab3Community(Community):
         signature = getattr(message, "signature")
         
         # if sender_key != peer.public_key.key_to_bin():
-        #     print(f"[SUBMIT TX] Sender key in message does not match peer public key for {pubkey_to_name(peer.public_key.key_to_bin().hex())}. Ignoring.")
+        #     print(f"[SUBMIT TX] Sender key in message does not match peer public key for {self.peer_name(peer.public_key.key_to_bin().hex())}. Ignoring.")
         #     return
 
         tx_hash = self.get_transaction_hash(sender_key, data, timestamp, signature)
 
         if tx_hash in self.validated_tx_hashes:
-            print(f"[SUBMIT TX] Transaction {tx_hash.hex()} from {pubkey_to_name(peer.public_key.key_to_bin().hex())} already in chain. Returning success.")
+            print(f"[SUBMIT TX] Transaction {tx_hash.hex()} from {self.peer_name(peer.public_key.key_to_bin().hex())} already in chain. Returning success.")
             response = SubmitTransactionResponse(success=True, tx_hash=tx_hash, message="Transaction already included in chain")
             self.ez_send(peer, response)
             return
 
         if any(tx_hash == self.get_transaction_hash(*tx) for tx in self.mempool):
-            print(f"[SUBMIT TX] Transaction {tx_hash.hex()} from {pubkey_to_name(peer.public_key.key_to_bin().hex())} already in mempool. Returning success.")
+            print(f"[SUBMIT TX] Transaction {tx_hash.hex()} from {self.peer_name(peer.public_key.key_to_bin().hex())} already in mempool. Returning success.")
             response = SubmitTransactionResponse(success=True, tx_hash=tx_hash, message="Transaction already in mempool")
             self.ez_send(peer, response)
             return
@@ -578,12 +593,12 @@ class TuDelftBlockchainLab3Community(Community):
         valid = crypto.is_valid_signature(sender_key_obj, concat, signature)
 
         if not valid:
-            print(f"[SUBMIT TX] Received invalid transaction from {pubkey_to_name(peer.public_key.key_to_bin().hex())}. Rejecting.")
+            print(f"[SUBMIT TX] Received invalid transaction from {self.peer_name(peer.public_key.key_to_bin().hex())}. Rejecting.")
             response = SubmitTransactionResponse(success=False, tx_hash=tx_hash, message="Invalid transaction")
             self.ez_send(peer, response)
             return
         
-        print(f"[SUBMIT TX] Received valid transaction with hash {tx_hash.hex()} from {pubkey_to_name(peer.public_key.key_to_bin().hex())}. Adding to mempool.")
+        print(f"[SUBMIT TX] Received valid transaction with hash {tx_hash.hex()} from {self.peer_name(peer.public_key.key_to_bin().hex())}. Adding to mempool.")
         self.mempool.append((sender_key, data, timestamp, signature))
         response = SubmitTransactionResponse(success=True, tx_hash=tx_hash, message="Transaction accepted")
         self.ez_send(peer, response)
@@ -591,21 +606,21 @@ class TuDelftBlockchainLab3Community(Community):
         for p in self.get_peers():
             if p.public_key.key_to_bin() != peer.public_key.key_to_bin() and p.public_key.key_to_bin() != self.server_public_key:
                 self.ez_send(p, message)
-                print(f"[SUBMIT TX] Relayed transaction with hash {tx_hash.hex()} to peer {pubkey_to_name(p.public_key.key_to_bin().hex())}.")
+                print(f"[SUBMIT TX] Relayed transaction with hash {tx_hash.hex()} to peer {self.peer_name(p.public_key.key_to_bin().hex())}.")
             
             
     @lazy_wrapper(GetChainHeightMessage)
     def handle_get_chain_height(self, peer: Peer, message: GetChainHeightMessage) -> None:
         if peer.public_key.key_to_bin() != self.server_public_key:
-            print(f"[GET HEIGHT] Received message from unknown peer {pubkey_to_name(peer.public_key.key_to_bin().hex())}. Ignoring.")
+            print(f"[GET HEIGHT] Received message from unknown peer {self.peer_name(peer.public_key.key_to_bin().hex())}. Ignoring.")
             return
         
         if not hasattr(message, "request_id"):
-            print(f"[GET HEIGHT] Received malformed get chain height message from {pubkey_to_name(peer.public_key.key_to_bin().hex())}. Ignoring.")
+            print(f"[GET HEIGHT] Received malformed get chain height message from {self.peer_name(peer.public_key.key_to_bin().hex())}. Ignoring.")
             return
         
         if not self.current_tip or self.current_tip not in self.height:
-            print(f"[GET HEIGHT] Current chain tip is unknown or has invalid height. Cannot respond to get chain height request from {pubkey_to_name(peer.public_key.key_to_bin().hex())}. Ignoring.")
+            print(f"[GET HEIGHT] Current chain tip is unknown or has invalid height. Cannot respond to get chain height request from {self.peer_name(peer.public_key.key_to_bin().hex())}. Ignoring.")
             return
         
         request_id = getattr(message, "request_id")
@@ -615,24 +630,24 @@ class TuDelftBlockchainLab3Community(Community):
         response = GetChainHeightResponse(request_id=request_id, height=height, tip_hash=tip_hash)
         self.ez_send(peer, response)
         
-        print(f"[GET HEIGHT] Received get chain height request with id {request_id} from {pubkey_to_name(peer.public_key.key_to_bin().hex())}. Responded with height {height} and tip hash {tip_hash.hex()}.")
+        print(f"[GET HEIGHT] Received get chain height request with id {request_id} from {self.peer_name(peer.public_key.key_to_bin().hex())}. Responded with height {height} and tip hash {tip_hash.hex()}.")
     
     
     @lazy_wrapper(GetBlockMessage)
     def handle_get_block(self, peer: Peer, message: GetBlockMessage) -> None:
         if peer.public_key.key_to_bin() != self.server_public_key:
-            print(f"[GET BLOCK] Received message from unknown peer {pubkey_to_name(peer.public_key.key_to_bin().hex())}. Ignoring.")
+            print(f"[GET BLOCK] Received message from unknown peer {self.peer_name(peer.public_key.key_to_bin().hex())}. Ignoring.")
             return
         
         if not hasattr(message, "height"):
-            print(f"[GET BLOCK] Received malformed get block message from {pubkey_to_name(peer.public_key.key_to_bin().hex())}. Ignoring.")
+            print(f"[GET BLOCK] Received malformed get block message from {self.peer_name(peer.public_key.key_to_bin().hex())}. Ignoring.")
             return
         
         height = getattr(message, "height")
         
         # if height < 0 or height >= len(self.chain):
         if height < 0 or height not in self.height.values():
-            print(f"[GET BLOCK] Received get block message with invalid height {height} from {pubkey_to_name(peer.public_key.key_to_bin().hex())}. Ignoring.")
+            print(f"[GET BLOCK] Received get block message with invalid height {height} from {self.peer_name(peer.public_key.key_to_bin().hex())}. Ignoring.")
             return
         
         # block = self.chain[height]
@@ -641,7 +656,7 @@ class TuDelftBlockchainLab3Community(Community):
         block = active_chain[height] if height < len(active_chain) else None
         
         if not block:
-            print(f"[GET BLOCK] Block at height {height} not found for get block request from {pubkey_to_name(peer.public_key.key_to_bin().hex())}. Ignoring.")
+            print(f"[GET BLOCK] Block at height {height} not found for get block request from {self.peer_name(peer.public_key.key_to_bin().hex())}. Ignoring.")
             return
         
         response = GetBlockResponse(
@@ -656,13 +671,13 @@ class TuDelftBlockchainLab3Community(Community):
         )
         self.ez_send(peer, response)
         
-        print(f"[GET BLOCK] Received get block request for height {height} from {pubkey_to_name(peer.public_key.key_to_bin().hex())}. Responded with block hash {block['block_hash'].hex()} containing {len(block['tx_hashes']) // 32} transactions.")
+        print(f"[GET BLOCK] Received get block request for height {height} from {self.peer_name(peer.public_key.key_to_bin().hex())}. Responded with block hash {block['block_hash'].hex()} containing {len(block['tx_hashes'])} transactions.")
         
         
     @lazy_wrapper(NewBlockBroadcastMessage)
     def handle_new_block_broadcast(self, peer: Peer, message: NewBlockBroadcastMessage) -> None:
         if not all(hasattr(message, attr) for attr in ["prev_hash", "txs_hash", "timestamp", "difficulty", "nonce", "block_hash", "tx_hashes"]):
-            print(f"Received malformed new block broadcast message from {pubkey_to_name(peer.public_key.key_to_bin().hex())}. Ignoring.")
+            print(f"Received malformed new block broadcast message from {self.peer_name(peer.public_key.key_to_bin().hex())}. Ignoring.")
             return
         
         # height = getattr(message, "height")
@@ -674,30 +689,25 @@ class TuDelftBlockchainLab3Community(Community):
         block_hash = getattr(message, "block_hash")
         tx_hashes = getattr(message, "tx_hashes")
         
-        print(f"[INTRA BLOCK] Received new block broadcast for block hash {block_hash.hex()} from {pubkey_to_name(peer.public_key.key_to_bin().hex())}. Block has {len(tx_hashes) // 32} transactions.")
-        
+        if block_hash in self.blocks:
+            print(f"[INTRA BLOCK] Already have block {block_hash.hex()}. Ignoring.")
+            return
+
+        print(f"[INTRA BLOCK] Received new block broadcast for block hash {block_hash.hex()} from {self.peer_name(peer.public_key.key_to_bin().hex())}. Block has {len(tx_hashes) // 32} transactions.")
+
         if block_hash != self.get_block_hash(prev_hash, txs_hash, timestamp, difficulty, nonce):
             print(f"[INTRA BLOCK] Block hash {block_hash.hex()} does not match computed hash from block data. Ignoring block.")
-            response = NewBlockBroadcastResponse(success=False, block_hash=block_hash, message="Block hash does not match computed hash")
-            self.ez_send(peer, response)
             return
-        
+
         if not self.is_difficult(prev_hash + txs_hash + timestamp.to_bytes(8, "big") + difficulty.to_bytes(4, "big") + nonce.to_bytes(8, "big"), difficulty):
             print(f"[INTRA BLOCK] Block does not meet difficulty requirement. Ignoring block.")
-            response = NewBlockBroadcastResponse(success=False, block_hash=block_hash, message="Block does not meet difficulty requirement")
-            self.ez_send(peer, response)
             return
-        
+
         if txs_hash != hashlib.sha256(tx_hashes).digest():
             print(f"[INTRA BLOCK] Transactions hash does not match computed hash from transaction hashes. Ignoring block.")
-            response = NewBlockBroadcastResponse(success=False, block_hash=block_hash, message="Transactions hash does not match computed hash")
-            self.ez_send(peer, response)
             return
-        
-        # By this point the block hash matches the provided, the difficulty is met, and the hash of the transactions is also valid.
 
         self.add_block({
-            # "height": height,
             "prev_hash": prev_hash,
             "txs_hash": txs_hash,
             "timestamp": timestamp,
@@ -706,8 +716,14 @@ class TuDelftBlockchainLab3Community(Community):
             "block_hash": block_hash,
             "tx_hashes": [tx_hashes[i:i+32] for i in range(0, len(tx_hashes), 32)]
         })
-        
+
         self.validated_tx_hashes.update(tx_hashes[i:i+32] for i in range(0, len(tx_hashes), 32))
+
+        sender_key = peer.public_key.key_to_bin()
+        for p in self.get_peers():
+            if p.public_key.key_to_bin() != sender_key:
+                self.ez_send(p, message)
+                print(f"[INTRA BLOCK] Relayed block {block_hash.hex()} to {self.peer_name(p.public_key.key_to_bin().hex())}.")
         
         
     @lazy_wrapper(SubmitTransactionResponse)
@@ -717,15 +733,21 @@ class TuDelftBlockchainLab3Community(Community):
 
 async def main():
     parser = argparse.ArgumentParser(description="Blockchain course lab 3 client.")
+    parser.add_argument("--member2-key", default=DEFAULT_MEMBER2_KEY, help="Hex public key of member 2")
+    parser.add_argument("--member2-name", default=DEFAULT_MEMBER2_NAME, help="Display name for member 2")
+    parser.add_argument("--member3-key", default=DEFAULT_MEMBER3_KEY, help="Hex public key of member 3")
+    parser.add_argument("--member3-name", default=DEFAULT_MEMBER3_NAME, help="Display name for member 3")
+    parser.add_argument("--server-key", default=DEFAULT_SERVER_KEY, help="Hex public key of the grading server")
+    parser.add_argument("--reg-community-id", default=DEFAULT_REG_COMMUNITY_ID, help="Hex registration community ID")
+    parser.add_argument("--blockchain-community-id", default=DEFAULT_BLOCKCHAIN_COMMUNITY_ID, help="Hex blockchain community ID")
+    parser.add_argument("--group-id", default=DEFAULT_GROUP_ID, help="Group ID for registration")
     args = parser.parse_args()
-    
-    if not PUBLIC_KEYS or len(PUBLIC_KEYS) < 2:
-        member2_key = input("Enter public key of member 2: ")
-        member3_key = input("Enter public key of member 3: ")
-    else:
-        member2_key = PUBLIC_KEYS[0]
-        member3_key = PUBLIC_KEYS[1]
-    
+
+    TuDelftBlockchainLab3Community.community_id = bytes.fromhex(args.blockchain_community_id)
+    TuDelftBlockchainLab3Community.server_public_key = bytes.fromhex(args.server_key)
+    TuDelftBlockchainLab3RegistrationCommunity.community_id = bytes.fromhex(args.reg_community_id)
+    TuDelftBlockchainLab3RegistrationCommunity.server_public_key = bytes.fromhex(args.server_key)
+
     builder = ConfigBuilder().clear_keys().clear_overlays()
     builder.add_key("my peer", "curve25519", "key.pem")
     builder.add_overlay(
@@ -733,7 +755,8 @@ async def main():
         "my peer",
         [WalkerDefinition(Strategy.RandomWalk, 20, {'timeout': 3.0})],
         default_bootstrap_defs,
-        {"member2_key": member2_key, "member3_key": member3_key},
+        {"member2_key": args.member2_key, "member2_name": args.member2_name,
+         "member3_key": args.member3_key, "member3_name": args.member3_name},
         [("started",)]
     )
     builder.add_overlay(
@@ -741,7 +764,8 @@ async def main():
         "my peer",
         [WalkerDefinition(Strategy.RandomWalk, 20, {'timeout': 3.0})],
         default_bootstrap_defs,
-        {"group_id": "20abc108c3d58494", "member2_key": member2_key, "member3_key": member3_key},
+        {"group_id": args.group_id, "member2_key": args.member2_key, "member2_name": args.member2_name,
+         "member3_key": args.member3_key, "member3_name": args.member3_name},
         [("started",)]
     )
 
